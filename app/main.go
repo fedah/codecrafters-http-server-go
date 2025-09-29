@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -16,6 +17,7 @@ const (
 	// Response Headers
 	CONTENT_TYPE   = "Content-Type: "
 	CONTENT_LENGTH = "Content-Length: "
+	USER_AGENT     = "User-Agent: "
 )
 
 func main() {
@@ -46,21 +48,26 @@ func main() {
 	_, path, _ := getRequestLine(buffer)
 
 	// fmt.Println(method + " " + path + " " + version)
-	rootpath := strings.Split(path, "/")[1]
+	pathSubstrings := strings.Split(path, "/")
+	rootpath := pathSubstrings[1]
 
 	fmt.Println("Sending response")
 	switch rootpath {
 	case "":
 		resp = OK + CRLF
+
 	case "echo":
-		resp = OK + CRLF
-		resp += CONTENT_TYPE + "text/plain" + CRLF
-		if len(path) > 1 {
-			phrase := strings.Split(path, "/")[2]
-			resp += fmt.Sprintf("%s%v%s", CONTENT_LENGTH, len(phrase), CRLF) + CRLF
-			resp += phrase
-			break
+		var body string
+		if len(pathSubstrings) > 2 {
+			body = pathSubstrings[2]
 		}
+		resp = buildOKResponseWithBody(body)
+
+	case "user-agent":
+		headers := getRequestHeaders(buffer)
+		userAgent := headers[strings.ToLower(USER_AGENT)]
+		resp = buildOKResponseWithBody(userAgent)
+
 	default:
 		fmt.Printf("Error path \"%s\" not found\n", path)
 		resp = NOT_FOUND + CRLF
@@ -84,4 +91,25 @@ func getRequestLine(buffer []byte) (method, path, version string) {
 		version = requestLine[1]
 	}
 	return
+}
+
+func buildOKResponseWithBody(body string) (resp string) {
+	resp = OK + CRLF
+	resp += CONTENT_TYPE + "text/plain" + CRLF
+	resp += CONTENT_LENGTH + strconv.Itoa(len(body)) + CRLF + CRLF
+	resp += body
+	return
+}
+
+func getRequestHeaders(buffer []byte) map[string]string {
+	headers := make(map[string]string)
+	lines := strings.SplitAfter(strings.Split(string(buffer), CRLF+CRLF)[0], CRLF)[1:]
+	for _, line := range lines {
+		name := strings.Split(line, ": ")[0]
+		value := strings.Split(line, ": ")[1]
+
+		headers[strings.ToLower(name)+": "] = value
+	}
+
+	return headers
 }
