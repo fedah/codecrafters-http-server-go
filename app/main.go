@@ -42,25 +42,27 @@ func main() {
 	}
 
 	var resp string
-	method, path, version := getRequestLine(buffer)
+	// method, path, version := getRequestLine(buffer)
+	_, path, _ := getRequestLine(buffer)
 
-	fmt.Println(method + " " + path + " " + version)
+	// fmt.Println(method + " " + path + " " + version)
+	rootpath := strings.Split(path, "/")[1]
 
 	fmt.Println("Sending response")
-	switch strings.Split(path, "/")[0] {
+	switch rootpath {
 	case "":
 		resp = OK + CRLF
-	case "echo":
-		resp = OK + CRLF
-		resp += CONTENT_TYPE + "text/plain" + CRLF
-		if len(path) > 1 {
-			phrase := strings.Split(path, "/")[1]
-			resp += fmt.Sprintf("%s%v%s", CONTENT_LENGTH, len(phrase), CRLF)
-			resp += phrase + CRLF
-			break
-		}
+	// case "echo":
+	// 	resp = OK + CRLF
+	// 	resp += CONTENT_TYPE + "text/plain" + CRLF
+	// 	if len(path) > 1 {
+	// 		phrase := strings.Split(path, "/")[1]
+	// 		resp += fmt.Sprintf("%s%v%s", CONTENT_LENGTH, len(phrase), CRLF)
+	// 		resp += phrase + CRLF
+	// 		break
+	// 	}
 	default:
-		fmt.Printf("Error path \"%s\" not found", path)
+		fmt.Printf("Error path \"%s\" not found\n", path)
 		resp = NOT_FOUND + CRLF
 	}
 
@@ -74,7 +76,8 @@ func getRequestLine(buffer []byte) (method, path, version string) {
 	method = requestLine[0]
 	path, version = "", ""
 
-	if len(requestLine) < 3 {
+	fmt.Println(requestLine)
+	if len(requestLine) == 3 {
 		path = requestLine[1]
 		version = requestLine[2]
 	} else {
