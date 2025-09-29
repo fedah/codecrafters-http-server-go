@@ -98,7 +98,7 @@ func handleConnection(conn net.Conn) error {
 		resp = getNotFoundResponse()
 		// process request / provided file.
 		filename := pathSubstrings[2]
-		if file, err := os.Open("/tmp/" + filename); err == nil {
+		if file, err := os.Open(filename); err == nil {
 			if content, err := io.ReadAll(file); err != nil {
 				log.Error("couldn't read file content: ", err)
 				resp = getNotFoundResponse()
