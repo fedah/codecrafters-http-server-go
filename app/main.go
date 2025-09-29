@@ -16,6 +16,7 @@ const (
 	CRLF = "\r\n"
 	// Response Status Lines
 	OK        = "HTTP/1.1 200 OK"
+	CREATED   = "HTTP/1.1 201 Created"
 	NOT_FOUND = "HTTP/1.1 404 Not Found"
 
 	// Response Headers
@@ -73,7 +74,7 @@ func handleConnection(conn net.Conn) error {
 
 	var resp string
 	// method, path, version := getRequestLine(buffer)
-	_, path, _ := getRequestLine(buffer)
+	method, path, _ := getRequestLine(buffer)
 
 	// log.Info(method + " " + path + " " + version)
 	pathSubstrings := strings.Split(path, "/")
@@ -98,20 +99,17 @@ func handleConnection(conn net.Conn) error {
 		resp = getOKResponseWithBody(userAgent, PLAINTEXT)
 
 	case "files":
-		// set response to not found by default.
-		resp = getNotFoundResponse()
-		// process request / provided file.
 		filename := pathSubstrings[2]
-		if file, err := os.Open(tmpDataDir + filename); err == nil {
-			if content, err := io.ReadAll(file); err != nil {
-				log.Error("couldn't read file content: ", err)
-				resp = getNotFoundResponse()
-			} else {
-				resp = getOKResponseWithBody(string(content), APP_OCTET_STREAM)
-			}
-		} else {
-			log.Errorf("couldn't open file %s: %s", filename, err)
+		switch method {
+		case "GET":
+			resp = handleGetFileRequest(filename)
+		case "POST":
+			resp = CREATED + CRLF + CRLF
+			handlePostFileRequest(filename, buffer)
+		default:
+			resp = getNotFoundResponse()
 		}
+
 	default:
 		log.Info(fmt.Sprintf("Error path \"%s\" not found\n", path))
 		resp = getNotFoundResponse()
@@ -156,8 +154,11 @@ func getNotFoundResponse() (resp string) {
 
 func getRequestHeaders(buffer []byte) map[string]string {
 	headers := make(map[string]string)
-	lines := strings.SplitAfter(strings.Split(string(buffer), CRLF+CRLF)[0], CRLF)[1:]
+	lines := strings.Split(strings.Split(string(buffer), CRLF+CRLF)[0], CRLF)[1:]
 	for _, line := range lines {
+		if line == "" {
+			continue
+		}
 		name := strings.Split(line, ": ")[0]
 		value := strings.Split(line, ": ")[1]
 
@@ -165,4 +166,37 @@ func getRequestHeaders(buffer []byte) map[string]string {
 	}
 
 	return headers
+}
+
+func getRequestBody(buffer []byte) []byte {
+	body := strings.Split(string(buffer), CRLF+CRLF)[1]
+	return []byte(body)
+}
+
+func handleGetFileRequest(filename string) (resp string) {
+	// set response to not found by default.
+	resp = getNotFoundResponse()
+	// process request / provided file.
+	if file, err := os.Open(tmpDataDir + filename); err == nil {
+		if content, err := io.ReadAll(file); err != nil {
+			log.Error("couldn't read file content: ", err)
+			resp = getNotFoundResponse()
+		} else {
+			resp = getOKResponseWithBody(string(content), APP_OCTET_STREAM)
+		}
+	} else {
+		log.Errorf("couldn't open file %s: %s", filename, err)
+	}
+	return
+}
+
+func handlePostFileRequest(filename string, buffer []byte) error {
+	headers := getRequestHeaders(buffer)
+	contentLength, _ := strconv.Atoi(headers[strings.ToLower(CONTENT_LENGTH)])
+	body := getRequestBody(buffer)
+	content := body[:contentLength]
+
+	log.Info("Headers: ", headers[strings.ToLower(CONTENT_LENGTH)], "content-length: ", contentLength)
+	os.WriteFile(tmpDataDir+filename, content, os.ModePerm)
+	return nil
 }
