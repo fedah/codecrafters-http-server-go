@@ -52,15 +52,15 @@ func main() {
 	switch rootpath {
 	case "":
 		resp = OK + CRLF
-	// case "echo":
-	// 	resp = OK + CRLF
-	// 	resp += CONTENT_TYPE + "text/plain" + CRLF
-	// 	if len(path) > 1 {
-	// 		phrase := strings.Split(path, "/")[1]
-	// 		resp += fmt.Sprintf("%s%v%s", CONTENT_LENGTH, len(phrase), CRLF)
-	// 		resp += phrase + CRLF
-	// 		break
-	// 	}
+	case "echo":
+		resp = OK + CRLF
+		resp += CONTENT_TYPE + "text/plain" + CRLF
+		if len(path) > 1 {
+			phrase := strings.Split(path, "/")[2]
+			resp += fmt.Sprintf("%s%v%s", CONTENT_LENGTH, len(phrase), CRLF) + CRLF
+			resp += phrase
+			break
+		}
 	default:
 		fmt.Printf("Error path \"%s\" not found\n", path)
 		resp = NOT_FOUND + CRLF
