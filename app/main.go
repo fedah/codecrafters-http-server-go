@@ -1,7 +1,8 @@
 package main
 
 import (
-	"fmt"
+	"errors"
+	"log"
 	"net"
 	"os"
 	"strconv"
@@ -20,38 +21,54 @@ const (
 	USER_AGENT     = "User-Agent: "
 )
 
+var logger = log.Default()
+
 func main() {
-	fmt.Println("Binding to port 4221")
+	logger.Println("Binding to port 4221")
 	listener, err := net.Listen("tcp", "0.0.0.0:4221")
 	if err != nil {
-		fmt.Println("Failed to bind to port 4221")
+		logger.Println("Failed to bind to port 4221")
 		os.Exit(1)
 	}
 
-	fmt.Println("Accepting client connection")
-	conn, err := listener.Accept()
-	if err != nil {
-		fmt.Println("Error accepting connection: ", err.Error())
-		os.Exit(1)
+	connCounter := 0
+	logger.Println("Accepting client connections")
+	for {
+		conn, err := listener.Accept()
+		logger.Printf("Accepted connection #%d", connCounter)
+		if err != nil {
+			logger.Println("Error accepting connection: ", err.Error())
+			os.Exit(1)
+		}
+
+		go func() {
+			logger.Printf("Handling request #%d", connCounter)
+			err = handleConnection(conn)
+			if err != nil {
+				logger.Fatal("Error handling request: ", err.Error())
+			}
+		}()
+		connCounter++
 	}
 
-	fmt.Println("Getting request path")
+}
+
+func handleConnection(conn net.Conn) error {
 	buffer := make([]byte, 1024)
-	_, err = conn.Read(buffer)
+	_, err := conn.Read(buffer)
 	if err != nil {
-		fmt.Println("Error reading request: ", err.Error())
-		os.Exit(1)
+		return errors.New("error reading request: " + err.Error())
 	}
 
 	var resp string
 	// method, path, version := getRequestLine(buffer)
 	_, path, _ := getRequestLine(buffer)
 
-	// fmt.Println(method + " " + path + " " + version)
+	// logger.Println(method + " " + path + " " + version)
 	pathSubstrings := strings.Split(path, "/")
 	rootpath := pathSubstrings[1]
 
-	fmt.Println("Sending response")
+	logger.Println("Sending response")
 	switch rootpath {
 	case "":
 		resp = OK + CRLF
@@ -69,13 +86,14 @@ func main() {
 		resp = buildOKResponseWithBody(userAgent)
 
 	default:
-		fmt.Printf("Error path \"%s\" not found\n", path)
+		logger.Printf("Error path \"%s\" not found\n", path)
 		resp = NOT_FOUND + CRLF
 	}
 
 	resp += CRLF
-	fmt.Println(resp)
+	logger.Println(resp)
 	conn.Write([]byte(resp))
+	return nil
 }
 
 func getRequestLine(buffer []byte) (method, path, version string) {
@@ -83,7 +101,7 @@ func getRequestLine(buffer []byte) (method, path, version string) {
 	method = requestLine[0]
 	path, version = "", ""
 
-	fmt.Println(requestLine)
+	logger.Println(requestLine)
 	if len(requestLine) == 3 {
 		path = requestLine[1]
 		version = requestLine[2]
