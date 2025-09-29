@@ -28,6 +28,10 @@ const (
 	APP_OCTET_STREAM = "application/octet-stream"
 )
 
+const (
+	tmpDataDir = "/tmp/data/codecrafters.io/http-server-tester/"
+)
+
 func main() {
 	log.Info("Binding to port 4221")
 	listener, err := net.Listen("tcp", "0.0.0.0:4221")
@@ -98,7 +102,7 @@ func handleConnection(conn net.Conn) error {
 		resp = getNotFoundResponse()
 		// process request / provided file.
 		filename := pathSubstrings[2]
-		if file, err := os.Open(filename); err == nil {
+		if file, err := os.Open(tmpDataDir + filename); err == nil {
 			if content, err := io.ReadAll(file); err != nil {
 				log.Error("couldn't read file content: ", err)
 				resp = getNotFoundResponse()
