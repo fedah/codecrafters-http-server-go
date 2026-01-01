@@ -298,21 +298,24 @@ func (r *request) getUserAgent() string {
 	return value
 }
 
-func (r *request) getAcceptEncoding() string {
-	value, _ := r.getHeader(ACCEPT_ENCODING)
-	return value
+func (r *request) getClientEncodingSchemes() []string {
+	// The typical key/value pair for encoding request header looks like:
+	// Accept-Encoding: encoding-1, encoding-2, encoding-3
+	value, found := r.getHeader(ACCEPT_ENCODING)
+	if !found {
+		return nil
+	}
+	return strings.Split(value, ", ")
 }
 
-var supportedEncodingSchemes = map[string]any{
+var serverSupportedEncodingSchemes = map[string]any{
 	"gzip": nil,
 }
 
 func (r *request) getResponseEncoding() string {
-	encodings := r.getAcceptEncoding()
-	schemes := strings.Split(encodings, " ")
-
+	schemes := r.getClientEncodingSchemes()
 	for _, scheme := range schemes {
-		if _, ok := supportedEncodingSchemes[scheme]; ok {
+		if _, ok := serverSupportedEncodingSchemes[scheme]; ok {
 			return scheme
 		}
 	}
