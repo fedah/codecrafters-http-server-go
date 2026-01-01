@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+
 	"io"
 	"net"
 	"os"
@@ -30,17 +31,27 @@ const (
 )
 
 const (
-	tmpDataDir = "/tmp/data/codecrafters.io/http-server-tester/"
+	tmpDataDir     = "/tmp/data/codecrafters.io/http-server-tester/"
+	serverIp       = "0.0.0.0"
+	serverPort     = "4221"
+	connBufferSize = 1024
 )
 
+// getSocketAdress returns a complete socket address given a ip and a port
+func getSocketAdress(ip, port string) string {
+	return ip + ":" + port
+}
+
 func main() {
+	// Instantiate the server tcp listener.
 	log.Info("Binding to port 4221")
-	listener, err := net.Listen("tcp", "0.0.0.0:4221")
+	listener, err := net.Listen("tcp", getSocketAdress(serverIp, serverPort))
 	if err != nil {
 		log.Info("Failed to bind to port 4221")
 		os.Exit(1)
 	}
 
+	// Accept and concurrently handle connections on requests
 	connCounter := 0
 	log.Info("Accepting client connections")
 	for {
@@ -66,52 +77,42 @@ func main() {
 }
 
 func handleConnection(conn net.Conn) error {
-	buffer := make([]byte, 1024)
-	_, err := conn.Read(buffer)
+	req, err := NewRequest(conn)
 	if err != nil {
 		return errors.New("error reading request: " + err.Error())
 	}
 
 	var resp string
-	// method, path, version := getRequestLine(buffer)
-	method, path, _ := getRequestLine(buffer)
-
-	// log.Info(method + " " + path + " " + version)
-	pathSubstrings := strings.Split(path, "/")
-	rootpath := pathSubstrings[1]
+	path := NewHttpPathWrapper(req.path)
 
 	log.Info("Sending response")
-	switch rootpath {
+	switch path.rootPath() {
 	case "":
 		resp = OK + CRLF
 		resp += CRLF // make the end of the headers
 
 	case "echo":
-		var body string
-		if len(pathSubstrings) > 2 {
-			body = pathSubstrings[2]
-		}
-		resp = getOKResponseWithBody(body, PLAINTEXT)
+		respBody := path.subPath()
+		resp = getOKResponseWithBody(respBody, PLAINTEXT)
 
 	case "user-agent":
-		headers := getRequestHeaders(buffer)
-		userAgent := headers[strings.ToLower(USER_AGENT)]
+		userAgent := req.headers[strings.ToLower(USER_AGENT)]
 		resp = getOKResponseWithBody(userAgent, PLAINTEXT)
 
 	case "files":
-		filename := pathSubstrings[2]
-		switch method {
+		filename := path.subPath()
+		switch req.method {
 		case "GET":
 			resp = handleGetFileRequest(filename)
 		case "POST":
 			resp = CREATED + CRLF + CRLF
-			handlePostFileRequest(filename, buffer)
+			handlePostFileRequest(req, filename)
 		default:
 			resp = getNotFoundResponse()
 		}
 
 	default:
-		log.Info(fmt.Sprintf("Error path \"%s\" not found\n", path))
+		log.Info(fmt.Sprintf("Error path \"%s\" not found\n", req.path))
 		resp = getNotFoundResponse()
 	}
 
@@ -121,6 +122,8 @@ func handleConnection(conn net.Conn) error {
 }
 
 func getRequestLine(buffer []byte) (method, path, version string) {
+	// The format of a HTTP request line is as follow:
+	// -> method path version OR
 	requestLine := strings.Split(strings.Split(string(buffer), CRLF)[0], " ")
 	method = requestLine[0]
 	path, version = "", ""
@@ -190,13 +193,94 @@ func handleGetFileRequest(filename string) (resp string) {
 	return
 }
 
-func handlePostFileRequest(filename string, buffer []byte) error {
-	headers := getRequestHeaders(buffer)
-	contentLength, _ := strconv.Atoi(headers[strings.ToLower(CONTENT_LENGTH)])
-	body := getRequestBody(buffer)
-	content := body[:contentLength]
-
-	log.Info("Headers: ", headers[strings.ToLower(CONTENT_LENGTH)], "content-length: ", contentLength)
+func handlePostFileRequest(req *request, filename string) error {
+	content := req.body[:req.getContentLength()]
 	os.WriteFile(tmpDataDir+filename, content, os.ModePerm)
 	return nil
+}
+
+type httpPathWrapper struct {
+	path     string
+	contents []string
+}
+
+func NewHttpPathWrapper(path string) *httpPathWrapper {
+	// Return early if the path that is empty
+	if len(path) == 0 {
+		return nil
+	}
+
+	// Since the http path always starts with /...
+	// contents[0] = "" when path is not empty.
+	// Thus we drop the first element in the slice, for ease of use.
+	contents := strings.Split(path, "/")
+	contents = contents[1:]
+	return &httpPathWrapper{
+		path:     path,
+		contents: contents,
+	}
+}
+
+func (pw *httpPathWrapper) rootPath() string {
+	if pw == nil || len(pw.contents) < 1 {
+		return ""
+	}
+
+	return pw.contents[0]
+}
+
+func (pw *httpPathWrapper) subPath() string {
+	if pw == nil || len(pw.contents) < 2 {
+		return ""
+	}
+
+	return strings.Join(pw.contents[1:], "/")
+}
+
+type request struct {
+	conn net.Conn
+
+	method  string
+	path    string
+	version string
+
+	headers map[string]string
+	body    []byte
+}
+
+func NewRequest(conn net.Conn) (*request, error) {
+	buffer := make([]byte, connBufferSize)
+	_, err := conn.Read(buffer)
+	if err != nil {
+		return nil, errors.New("error reading request: " + err.Error())
+	}
+
+	method, path, version := getRequestLine(buffer)
+	headers := getRequestHeaders(buffer)
+	body := getRequestBody(buffer)
+
+	return &request{
+		conn:    conn,
+		method:  method,
+		path:    path,
+		version: version,
+		headers: headers,
+		body:    body,
+	}, nil
+}
+
+func (r *request) getHeader(headerName string) (string, bool) {
+	value, found := r.headers[strings.ToLower(headerName)]
+	return value, found
+}
+
+func (r *request) getContentType() string {
+	value, _ := r.getHeader(CONTENT_TYPE)
+	return value
+}
+
+func (r *request) getContentLength() int {
+	value, _ := r.getHeader(CONTENT_LENGTH)
+	length, _ := strconv.Atoi(value)
+	return length
 }
