@@ -3,8 +3,8 @@ package main
 import (
 	"bytes"
 	"compress/gzip"
-	"errors"
 	"fmt"
+	"sync"
 
 	"io"
 	"net"
@@ -27,6 +27,7 @@ const (
 	// Request Headers
 	USER_AGENT      = "User-Agent: "
 	ACCEPT_ENCODING = "Accept-Encoding: "
+	CONNECTION      = "Connection: "
 
 	// Response Headers
 	CONTENT_TYPE     = "Content-Type: "
@@ -36,6 +37,12 @@ const (
 	// Content-Types
 	PLAINTEXT        = "text/plain"
 	APP_OCTET_STREAM = "application/octet-stream"
+
+	// Connection Header Values
+	CONNECTION_CLOSE = "close"
+
+	// Content Encoding Shemes
+	GZIP string = "gzip"
 )
 
 const (
@@ -71,8 +78,8 @@ func main() {
 		}
 
 		go func() {
-			defer conn.Close()
-			log.Info("Handling request #", connCounter)
+			// defer conn.Close()
+			log.Info("Handling Connection #", connCounter)
 			err = handleConnection(conn)
 			if err != nil {
 				log.Error("Error handling request: ", err.Error())
@@ -84,12 +91,48 @@ func main() {
 
 }
 
+// GetRequest returns a request struct if the connection has any pending/incoming request on the wire
+// that has not been manifested yet. The keepConnAlive flag informs whether the connections should be close after handling the next request.
+// In which case, the connection handler will stop accepting next requests after manifesting this current one.
+func GetRequest(conn net.Conn, buffer []byte, wg *sync.WaitGroup) (req *request, keepConnAlive bool) {
+	req = NewRequest(conn, buffer, wg)
+	keepConnAlive = !req.shouldCloseConnectionAfterReq()
+	return req, keepConnAlive
+}
+
 func handleConnection(conn net.Conn) error {
-	req, err := NewRequest(conn)
-	if err != nil {
-		return errors.New("error reading request: " + err.Error())
+	var req *request
+	keepConnAlive := true
+	wg := &sync.WaitGroup{}
+	reqCount := 0
+
+	for {
+		buffer := make([]byte, connBufferSize)
+		_, err := conn.Read(buffer)
+
+		if err != nil {
+			continue
+		}
+
+		req, keepConnAlive = GetRequest(conn, buffer, wg)
+		if req != nil {
+			reqCount++
+			log.Infof("Handling request #%d KeepConnAlive: %t", reqCount, keepConnAlive)
+			go handleRequest(req)
+		}
+
+		if req.shouldCloseConnectionAfterReq() {
+			break
+		}
 	}
 
+	wg.Wait()
+	return nil
+}
+
+func handleRequest(req *request) error {
+	// Increase connection wait group count
+	req.connWg.Add(1)
 	var resp string
 	path := NewHttpPathWrapper(req.path)
 
@@ -124,12 +167,21 @@ func handleConnection(conn net.Conn) error {
 		resp = getNotFoundResponse()
 	}
 
+	// Write response on wire
 	log.Info("Response: \n", resp)
-	conn.Write([]byte(resp))
+	req.conn.Write([]byte(resp))
+	// Make goroutine as done
+	req.connWg.Done()
+
+	// Close connection if instructed by request headers
+	if req.shouldCloseConnectionAfterReq() {
+		req.connWg.Wait()
+		req.conn.Close()
+	}
 	return nil
 }
 
-func getRequestLine(buffer []byte) (method, path, version string) {
+func getRequestLineParts(buffer []byte) (method, path, version string) {
 	// The format of a HTTP request line is as follow:
 	// -> method path version OR
 	requestLine := strings.Split(strings.Split(string(buffer), CRLF)[0], " ")
@@ -265,7 +317,8 @@ func (pw *httpPathWrapper) secondary() string {
 }
 
 type request struct {
-	conn net.Conn
+	conn   net.Conn
+	connWg *sync.WaitGroup
 
 	method  string
 	path    string
@@ -275,25 +328,24 @@ type request struct {
 	body    []byte
 }
 
-func NewRequest(conn net.Conn) (*request, error) {
-	buffer := make([]byte, connBufferSize)
-	_, err := conn.Read(buffer)
-	if err != nil {
-		return nil, errors.New("error reading request: " + err.Error())
-	}
+func NewRequest(conn net.Conn, buffer []byte, wg *sync.WaitGroup) *request {
+	// log.Infof("Request Buffer : %v", string(buffer))
 
-	method, path, version := getRequestLine(buffer)
+	method, path, version := getRequestLineParts(buffer)
 	headers := getRequestHeaders(buffer)
 	body := getRequestBody(buffer)
 
 	return &request{
-		conn:    conn,
+		conn:   conn,
+		connWg: wg,
+
 		method:  method,
 		path:    path,
 		version: version,
+
 		headers: headers,
 		body:    body,
-	}, nil
+	}
 }
 
 func (r *request) getHeader(headerName string) (string, bool) {
@@ -311,6 +363,13 @@ func (r *request) getUserAgent() string {
 	return value
 }
 
+// shouldCloseConnectionAfterReq flags whether the underlying tcp connection
+// should be closed after handling request based on request CONNECTION header value
+func (r *request) shouldCloseConnectionAfterReq() bool {
+	value, _ := r.getHeader(CONNECTION)
+	return value == CONNECTION_CLOSE
+}
+
 func (r *request) getClientEncodingSchemes() []string {
 	// The typical key/value pair for encoding request header looks like:
 	// Accept-Encoding: encoding-1, encoding-2, encoding-3
@@ -322,7 +381,7 @@ func (r *request) getClientEncodingSchemes() []string {
 }
 
 var serverSupportedEncodingSchemes = map[string]any{
-	"gzip": nil,
+	GZIP: nil,
 }
 
 func (r *request) getResponseEncoding() string {
