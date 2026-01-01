@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"compress/gzip"
 	"errors"
 	"fmt"
 
@@ -148,15 +150,26 @@ func getOKResponseWithBody(body, contentType, contentEncoding string) (resp stri
 	// status line
 	resp = OK + CRLF
 
+	// Only include a content encoding header if provided
+	if contentEncoding != "" {
+		resp += CONTENT_ENCODING + contentEncoding + CRLF
+		// Enocde the body
+		var buffer bytes.Buffer
+		w := gzip.NewWriter(&buffer)
+		w.Write([]byte(body))
+		w.Close()
+
+		encodedBody := buffer.Bytes()
+		log.Printf("Encoded Body: %v %v", encodedBody, buffer)
+		body = string(encodedBody)
+	}
+
 	// responses headers
 	resp += CONTENT_TYPE + contentType + CRLF
 	resp += CONTENT_LENGTH + strconv.Itoa(len(body)) + CRLF
 
-	// Only include a content encoding header if provided
-	if contentEncoding != "" {
-		resp += CONTENT_ENCODING + contentEncoding + CRLF
-	}
-	resp += CRLF // make end of headers
+	// make end of headers
+	resp += CRLF
 
 	// response body
 	resp += body
