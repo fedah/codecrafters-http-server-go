@@ -14,16 +14,22 @@ import (
 )
 
 const (
+	// Carriage Return Line Feed
 	CRLF = "\r\n"
+
 	// Response Status Lines
 	OK        = "HTTP/1.1 200 OK"
 	CREATED   = "HTTP/1.1 201 Created"
 	NOT_FOUND = "HTTP/1.1 404 Not Found"
 
+	// Request Headers
+	USER_AGENT      = "User-Agent: "
+	ACCEPT_ENCODING = "Accept-Encoding: "
+
 	// Response Headers
-	CONTENT_TYPE   = "Content-Type: "
-	CONTENT_LENGTH = "Content-Length: "
-	USER_AGENT     = "User-Agent: "
+	CONTENT_TYPE     = "Content-Type: "
+	CONTENT_LENGTH   = "Content-Length: "
+	CONTENT_ENCODING = "Content-Encoding: "
 
 	// Content-Types
 	PLAINTEXT        = "text/plain"
@@ -86,24 +92,24 @@ func handleConnection(conn net.Conn) error {
 	path := NewHttpPathWrapper(req.path)
 
 	log.Info("Sending response")
-	switch path.rootPath() {
+	switch path.main() {
 	case "":
 		resp = OK + CRLF
 		resp += CRLF // make the end of the headers
 
 	case "echo":
-		respBody := path.subPath()
-		resp = getOKResponseWithBody(respBody, PLAINTEXT)
+		respBody := path.secondary()
+		resp = getOKResponseWithBody(respBody, PLAINTEXT, req.getResponseEncoding())
 
 	case "user-agent":
-		userAgent := req.headers[strings.ToLower(USER_AGENT)]
-		resp = getOKResponseWithBody(userAgent, PLAINTEXT)
+		userAgent := req.getUserAgent()
+		resp = getOKResponseWithBody(userAgent, PLAINTEXT, req.getResponseEncoding())
 
 	case "files":
-		filename := path.subPath()
+		filename := path.secondary()
 		switch req.method {
 		case "GET":
-			resp = handleGetFileRequest(filename)
+			resp = handleGetFileRequest(req, filename)
 		case "POST":
 			resp = CREATED + CRLF + CRLF
 			handlePostFileRequest(req, filename)
@@ -138,13 +144,21 @@ func getRequestLine(buffer []byte) (method, path, version string) {
 	return
 }
 
-func getOKResponseWithBody(body, contentType string) (resp string) {
-	resp = OK + CRLF // status line
-	// headers
+func getOKResponseWithBody(body, contentType, contentEncoding string) (resp string) {
+	// status line
+	resp = OK + CRLF
+
+	// responses headers
 	resp += CONTENT_TYPE + contentType + CRLF
 	resp += CONTENT_LENGTH + strconv.Itoa(len(body)) + CRLF
+
+	// Only include a content encoding header if provided
+	if contentEncoding != "" {
+		resp += CONTENT_ENCODING + contentEncoding + CRLF
+	}
 	resp += CRLF // make end of headers
-	// body
+
+	// response body
 	resp += body
 	return
 }
@@ -176,7 +190,7 @@ func getRequestBody(buffer []byte) []byte {
 	return []byte(body)
 }
 
-func handleGetFileRequest(filename string) (resp string) {
+func handleGetFileRequest(req *request, filename string) (resp string) {
 	// set response to not found by default.
 	resp = getNotFoundResponse()
 	// process request / provided file.
@@ -185,7 +199,7 @@ func handleGetFileRequest(filename string) (resp string) {
 			log.Error("couldn't read file content: ", err)
 			resp = getNotFoundResponse()
 		} else {
-			resp = getOKResponseWithBody(string(content), APP_OCTET_STREAM)
+			resp = getOKResponseWithBody(string(content), APP_OCTET_STREAM, req.getResponseEncoding())
 		}
 	} else {
 		log.Errorf("couldn't open file %s: %s", filename, err)
@@ -221,7 +235,7 @@ func NewHttpPathWrapper(path string) *httpPathWrapper {
 	}
 }
 
-func (pw *httpPathWrapper) rootPath() string {
+func (pw *httpPathWrapper) main() string {
 	if pw == nil || len(pw.contents) < 1 {
 		return ""
 	}
@@ -229,7 +243,7 @@ func (pw *httpPathWrapper) rootPath() string {
 	return pw.contents[0]
 }
 
-func (pw *httpPathWrapper) subPath() string {
+func (pw *httpPathWrapper) secondary() string {
 	if pw == nil || len(pw.contents) < 2 {
 		return ""
 	}
@@ -277,6 +291,32 @@ func (r *request) getHeader(headerName string) (string, bool) {
 func (r *request) getContentType() string {
 	value, _ := r.getHeader(CONTENT_TYPE)
 	return value
+}
+
+func (r *request) getUserAgent() string {
+	value, _ := r.getHeader(USER_AGENT)
+	return value
+}
+
+func (r *request) getAcceptEncoding() string {
+	value, _ := r.getHeader(ACCEPT_ENCODING)
+	return value
+}
+
+var supportedEncodingSchemes = map[string]any{
+	"gzip": nil,
+}
+
+func (r *request) getResponseEncoding() string {
+	encodings := r.getAcceptEncoding()
+	schemes := strings.Split(encodings, " ")
+
+	for _, scheme := range schemes {
+		if _, ok := supportedEncodingSchemes[scheme]; ok {
+			return scheme
+		}
+	}
+	return ""
 }
 
 func (r *request) getContentLength() int {
