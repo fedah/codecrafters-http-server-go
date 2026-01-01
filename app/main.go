@@ -17,7 +17,8 @@ import (
 
 const (
 	// Carriage Return Line Feed
-	CRLF = "\r\n"
+	CRLF  = "\r\n"
+	BLANK = ""
 
 	// Response Status Lines
 	OK        = "HTTP/1.1 200 OK"
@@ -139,16 +140,15 @@ func handleRequest(req *request) error {
 	log.Info("Sending response")
 	switch path.main() {
 	case "":
-		resp = OK + CRLF
-		resp += CRLF // make the end of the headers
+		resp = getOKResponseWithBody(req, BLANK, BLANK)
 
 	case "echo":
 		respBody := path.secondary()
-		resp = getOKResponseWithBody(respBody, PLAINTEXT, req.getResponseEncoding())
+		resp = getOKResponseWithBody(req, respBody, PLAINTEXT)
 
 	case "user-agent":
 		userAgent := req.getUserAgent()
-		resp = getOKResponseWithBody(userAgent, PLAINTEXT, req.getResponseEncoding())
+		resp = getOKResponseWithBody(req, userAgent, PLAINTEXT)
 
 	case "files":
 		filename := path.secondary()
@@ -159,12 +159,12 @@ func handleRequest(req *request) error {
 			resp = CREATED + CRLF + CRLF
 			handlePostFileRequest(req, filename)
 		default:
-			resp = getNotFoundResponse()
+			resp = getNotFoundResponse(req)
 		}
 
 	default:
 		log.Info(fmt.Sprintf("Error path \"%s\" not found\n", req.path))
-		resp = getNotFoundResponse()
+		resp = getNotFoundResponse(req)
 	}
 
 	// Write response on wire
@@ -198,7 +198,10 @@ func getRequestLineParts(buffer []byte) (method, path, version string) {
 	return
 }
 
-func getOKResponseWithBody(body, contentType, contentEncoding string) (resp string) {
+func getOKResponseWithBody(req *request, respBody, contentType string) (resp string) {
+	contentEncoding := req.getResponseEncoding()
+	closeConnection := req.shouldCloseConnectionAfterReq()
+
 	// status line
 	resp = OK + CRLF
 
@@ -208,28 +211,40 @@ func getOKResponseWithBody(body, contentType, contentEncoding string) (resp stri
 		// Enocde the body
 		var buffer bytes.Buffer
 		w := gzip.NewWriter(&buffer)
-		w.Write([]byte(body))
+		w.Write([]byte(respBody))
 		w.Close()
 
 		encodedBody := buffer.Bytes()
 		log.Printf("Encoded Body: %v %v", encodedBody, buffer)
-		body = string(encodedBody)
+		respBody = string(encodedBody)
 	}
 
 	// responses headers
-	resp += CONTENT_TYPE + contentType + CRLF
-	resp += CONTENT_LENGTH + strconv.Itoa(len(body)) + CRLF
+	if contentType != "" {
+		resp += CONTENT_TYPE + contentType + CRLF
+	}
+
+	if respBody != "" {
+		resp += CONTENT_LENGTH + strconv.Itoa(len(respBody)) + CRLF
+	}
+
+	if closeConnection {
+		resp += CONNECTION + CONNECTION_CLOSE + CRLF
+	}
 
 	// make end of headers
 	resp += CRLF
 
 	// response body
-	resp += body
+	resp += respBody
 	return
 }
 
-func getNotFoundResponse() (resp string) {
+func getNotFoundResponse(req *request) (resp string) {
 	resp = NOT_FOUND + CRLF
+	if req.shouldCloseConnectionAfterReq() {
+		resp += CONNECTION + CONNECTION_CLOSE + CRLF
+	}
 	resp += CRLF // make the end of the headers
 	return
 }
@@ -257,14 +272,14 @@ func getRequestBody(buffer []byte) []byte {
 
 func handleGetFileRequest(req *request, filename string) (resp string) {
 	// set response to not found by default.
-	resp = getNotFoundResponse()
+	resp = getNotFoundResponse(req)
 	// process request / provided file.
 	if file, err := os.Open(tmpDataDir + filename); err == nil {
 		if content, err := io.ReadAll(file); err != nil {
 			log.Error("couldn't read file content: ", err)
-			resp = getNotFoundResponse()
+			resp = getNotFoundResponse(req)
 		} else {
-			resp = getOKResponseWithBody(string(content), APP_OCTET_STREAM, req.getResponseEncoding())
+			resp = getOKResponseWithBody(req, string(content), APP_OCTET_STREAM)
 		}
 	} else {
 		log.Errorf("couldn't open file %s: %s", filename, err)
