@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"compress/gzip"
-	"fmt"
 	"sync"
 
 	"io"
@@ -89,7 +88,6 @@ func main() {
 		}()
 		connCounter++
 	}
-
 }
 
 // GetRequest returns a request struct if the connection has any pending/incoming request on the wire
@@ -107,7 +105,7 @@ func handleConnection(conn net.Conn) error {
 	wg := &sync.WaitGroup{}
 	reqCount := 0
 
-	for {
+	for keepConnAlive {
 		buffer := make([]byte, connBufferSize)
 		_, err := conn.Read(buffer)
 
@@ -163,7 +161,7 @@ func handleRequest(req *request) error {
 		}
 
 	default:
-		log.Info(fmt.Sprintf("Error path \"%s\" not found\n", req.path))
+		log.Infof("Error path \"%s\" not found\n", req.path)
 		resp = getNotFoundResponse(req)
 	}
 
